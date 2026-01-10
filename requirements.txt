@@ -4,3 +4,4 @@ matplotlib
 japanize-matplotlib
 plotly
 openpyxl
+setuptools
