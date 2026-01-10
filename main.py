@@ -17,7 +17,7 @@ def check_password():
         st.session_state["password_correct"] = None
     if st.session_state["password_correct"] == True: return True
     def password_entered():
-        if st.session_state["password_input"] == "waseda123":
+        if st.session_state["password_input"] == "wbc1901":
             st.session_state["password_correct"] = True
         else:
             st.session_state["password_correct"] = False
@@ -57,7 +57,7 @@ if check_password():
 
     if not df.empty:
         st.sidebar.header("Filter")
-        pitcher = st.sidebar.selectbox("投手を選択", sorted(df['Pitcher'].unique()))
+        pitcher = st.sidebar.selectbox("投手を選択", sorted(df['Pitcher First Name'].unique()))
         p_df = df[df['Pitcher'] == pitcher].copy()
         
         dates = st.sidebar.multiselect("日付選択", sorted(p_df['Date_str'].unique(), reverse=True))
