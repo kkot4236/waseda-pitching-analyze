@@ -1,7 +1,5 @@
 streamlit
 pandas
 matplotlib
-japanize-matplotlib
 plotly
 openpyxl
-setuptools
