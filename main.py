@@ -20,7 +20,6 @@ def check_password():
 if check_password():
     st.set_page_config(layout="wide", page_title="Rapsodo Analysis")
 
-    # 球種ごとの色設定
     PITCH_COLORS = {
         'FB': '#FF4B4B', 'CB': '#1E90FF', 'SL': '#FF1493', 
         'CH': '#32CD32', 'SP': '#40E0D0', 'CT': '#8A2BE2', 
@@ -30,13 +29,11 @@ if check_password():
     @st.cache_data
     def load_data():
         all_data = []
-        # リポジトリ内の全フォルダを探索
         for root, dirs, files in os.walk("."):
             for file in files:
                 if file.endswith(('.csv', '.xlsx')):
                     path = os.path.join(root, file)
                     try:
-                        # CSVとExcel両対応。CSVの場合はエンコーディングを考慮
                         if file.endswith('.xlsx'):
                             df = pd.read_excel(path)
                         else:
@@ -45,17 +42,18 @@ if check_password():
                             except:
                                 df = pd.read_csv(path, encoding='shift-jis')
                         
-                        # カラム名の前後の空白を削除
                         df.columns = df.columns.str.strip()
                         
-                        # 指定通り Pitcher First Name を表示名に使用
+                        # 投手名の設定
                         if 'Pitcher First Name' in df.columns:
                             df['PitcherDisplay'] = df['Pitcher First Name']
-                        elif 'Pitcher' in df.columns:
-                            df['PitcherDisplay'] = df['Pitcher']
                         else:
                             df['PitcherDisplay'] = "Unknown"
 
+                        # ストライク判定（Y=True, N=False）
+                        if 'Is Strike' in df.columns:
+                            df['is_strike_bool'] = df['Is Strike'].map({'Y': True, 'N': False})
+                        
                         # 数値データの変換
                         num_cols = ['RelSpeed (KMH)', 'InducedVertBreak (CM)', 'HorzBreak (CM)', 'PlateLocSide (CM)', 'PlateLocHeight (CM)', 'SpinRate']
                         for c in num_cols:
@@ -70,12 +68,10 @@ if check_password():
     df = load_data()
 
     if not df.empty:
-        # 投手リストの取得
         pitcher_list = sorted(df['PitcherDisplay'].dropna().unique())
         
         if not pitcher_list or pitcher_list == ["Unknown"]:
-            st.warning("データは見つかりましたが、投手名（Pitcher First Name）が空欄のようです。ファイルの中身を確認してください。")
-            st.write("見つかったファイル:", df.columns.tolist())
+            st.warning("投手名データが見つかりません。")
         else:
             pitcher = st.sidebar.selectbox("投手を選択", pitcher_list)
             p_df = df[df['PitcherDisplay'] == pitcher].copy()
@@ -85,7 +81,6 @@ if check_password():
             col1, col2 = st.columns(2)
             
             with col1:
-                # 変化量グラフ
                 fig, ax = plt.subplots(figsize=(6,6))
                 for pt in p_df['Pitch Type'].unique():
                     sub = p_df[p_df['Pitch Type'] == pt]
@@ -97,9 +92,7 @@ if check_password():
                 st.pyplot(fig)
 
             with col2:
-                # 投球位置グラフ
                 fig, ax = plt.subplots(figsize=(6,6))
-                # ストライクゾーンの枠
                 ax.add_patch(plt.Rectangle((-25, 45), 50, 60, fill=False, lw=2, color='black'))
                 for pt in p_df['Pitch Type'].unique():
                     sub = p_df[p_df['Pitch Type'] == pt]
@@ -108,11 +101,30 @@ if check_password():
                 ax.set_title("投球位置 (Location cm)"); ax.set_box_aspect(1)
                 st.pyplot(fig)
             
+            # --- 集計表の作成 ---
             st.subheader("📋 球種別平均データ")
-            show_cols = ['RelSpeed (KMH)', 'SpinRate', 'InducedVertBreak (CM)', 'HorzBreak (CM)']
-            # 存在する列だけを表示
-            actual_cols = [c for c in show_cols if c in p_df.columns]
-            summary = p_df.groupby('Pitch Type')[actual_cols].mean()
-            st.dataframe(summary.style.format(precision=1), use_container_width=True)
+            
+            # グループ化して平均とストライク率を計算
+            summary = p_df.groupby('Pitch Type').agg({
+                'RelSpeed (KMH)': 'mean',
+                'SpinRate': 'mean',
+                'InducedVertBreak (CM)': 'mean',
+                'HorzBreak (CM)': 'mean',
+                'is_strike_bool': 'mean' # True(1)とFalse(0)の平均がそのまま率になる
+            })
+            
+            # ストライク率をパーセント表記に変換
+            summary['Strike %'] = summary['is_strike_bool'] * 100
+            
+            # 表示する列を選択して整理
+            display_cols = ['RelSpeed (KMH)', 'SpinRate', 'InducedVertBreak (CM)', 'HorzBreak (CM)', 'Strike %']
+            final_table = summary[display_cols].rename(columns={
+                'RelSpeed (KMH)': '平均球速',
+                'SpinRate': '回転数',
+                'InducedVertBreak (CM)': '縦変化',
+                'HorzBreak (CM)': '横変化'
+            })
+            
+            st.dataframe(final_table.style.format(precision=1), use_container_width=True)
     else:
-        st.error("ファイルが見つかりません。GitHubの 'data' フォルダにCSVまたはExcelが入っているか確認してください。")
+        st.error("ファイルが見つかりません。")
