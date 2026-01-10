@@ -9,7 +9,7 @@ def check_password():
         st.session_state["password_correct"] = None
     if st.session_state["password_correct"] == True: return True
     def password_entered():
-        if st.session_state["password_input"] == "wbc1901":
+        if st.session_state["password_input"] == "waseda123":
             st.session_state["password_correct"] = True
         else:
             st.session_state["password_correct"] = False
@@ -44,17 +44,23 @@ if check_password():
                         
                         df.columns = df.columns.str.strip()
                         
+                        # 日付の抽出 (Pitch Created At から yyyy-mm-dd を作成)
+                        if 'Pitch Created At' in df.columns:
+                            df['Date'] = pd.to_datetime(df['Pitch Created At']).dt.strftime('%Y-%m-%d')
+                        else:
+                            df['Date'] = "Unknown Date"
+
                         # 投手名の設定
                         if 'Pitcher First Name' in df.columns:
                             df['PitcherDisplay'] = df['Pitcher First Name']
                         else:
                             df['PitcherDisplay'] = "Unknown"
 
-                        # ストライク判定（Y=True, N=False）
+                        # ストライク判定
                         if 'Is Strike' in df.columns:
                             df['is_strike_bool'] = df['Is Strike'].map({'Y': True, 'N': False})
                         
-                        # 数値データの変換
+                        # 数値変換
                         num_cols = ['RelSpeed (KMH)', 'InducedVertBreak (CM)', 'HorzBreak (CM)', 'PlateLocSide (CM)', 'PlateLocHeight (CM)', 'SpinRate']
                         for c in num_cols:
                             if c in df.columns:
@@ -68,15 +74,27 @@ if check_password():
     df = load_data()
 
     if not df.empty:
-        pitcher_list = sorted(df['PitcherDisplay'].dropna().unique())
+        # --- サイドバー操作 ---
+        st.sidebar.header("検索フィルター")
         
-        if not pitcher_list or pitcher_list == ["Unknown"]:
-            st.warning("投手名データが見つかりません。")
+        # 1. 日付を選択 (降順：新しい日付が上)
+        date_list = sorted(df['Date'].unique(), reverse=True)
+        selected_date = st.sidebar.selectbox("日付を選択", date_list)
+        
+        # 日付で絞り込み
+        date_filtered_df = df[df['Date'] == selected_date]
+        
+        # 2. その日に投げた投手のみを選択肢に出す
+        pitcher_list = sorted(date_filtered_df['PitcherDisplay'].dropna().unique())
+        
+        if not pitcher_list:
+            st.warning(f"{selected_date} のデータに投手名が見つかりません。")
         else:
-            pitcher = st.sidebar.selectbox("投手を選択", pitcher_list)
-            p_df = df[df['PitcherDisplay'] == pitcher].copy()
+            selected_pitcher = st.sidebar.selectbox("投手を選択", pitcher_list)
+            p_df = date_filtered_df[date_filtered_df['PitcherDisplay'] == selected_pitcher].copy()
 
-            st.header(f"📊 {pitcher} 投球分析レポート")
+            # --- メイン画面 ---
+            st.header(f"📊 {selected_pitcher} 投球分析 ({selected_date})")
             
             col1, col2 = st.columns(2)
             
@@ -101,30 +119,22 @@ if check_password():
                 ax.set_title("投球位置 (Location cm)"); ax.set_box_aspect(1)
                 st.pyplot(fig)
             
-            # --- 集計表の作成 ---
+            # --- 集計表 ---
             st.subheader("📋 球種別平均データ")
             
-            # グループ化して平均とストライク率を計算
-            summary = p_df.groupby('Pitch Type').agg({
-                'RelSpeed (KMH)': 'mean',
-                'SpinRate': 'mean',
-                'InducedVertBreak (CM)': 'mean',
-                'HorzBreak (CM)': 'mean',
-                'is_strike_bool': 'mean' # True(1)とFalse(0)の平均がそのまま率になる
-            })
+            # 必要なカラムの存在確認
+            summary_cols = {'RelSpeed (KMH)': '平均球速', 'SpinRate': '回転数', 'InducedVertBreak (CM)': '縦変化', 'HorzBreak (CM)': '横変化'}
+            agg_dict = {col: 'mean' for col in summary_cols.keys() if col in p_df.columns}
+            if 'is_strike_bool' in p_df.columns:
+                agg_dict['is_strike_bool'] = 'mean'
             
-            # ストライク率をパーセント表記に変換
-            summary['Strike %'] = summary['is_strike_bool'] * 100
+            summary = p_df.groupby('Pitch Type').agg(agg_dict)
             
-            # 表示する列を選択して整理
-            display_cols = ['RelSpeed (KMH)', 'SpinRate', 'InducedVertBreak (CM)', 'HorzBreak (CM)', 'Strike %']
-            final_table = summary[display_cols].rename(columns={
-                'RelSpeed (KMH)': '平均球速',
-                'SpinRate': '回転数',
-                'InducedVertBreak (CM)': '縦変化',
-                'HorzBreak (CM)': '横変化'
-            })
+            if 'is_strike_bool' in summary.columns:
+                summary['Strike %'] = summary['is_strike_bool'] * 100
+                summary = summary.drop(columns=['is_strike_bool'])
             
-            st.dataframe(final_table.style.format(precision=1), use_container_width=True)
+            summary = summary.rename(columns=summary_cols)
+            st.dataframe(summary.style.format(precision=1), use_container_width=True)
     else:
         st.error("ファイルが見つかりません。")
