@@ -20,7 +20,6 @@ def check_password():
 if check_password():
     st.set_page_config(layout="wide", page_title="Waseda Pitcher Analytics")
 
-    # --- デザインCSS ---
     st.markdown("""
         <style>
         .stats-table { margin: auto; border-collapse: collapse; width: 100%; border: 1px solid #333; font-size: 14px; }
@@ -32,39 +31,43 @@ if check_password():
     @st.cache_data
     def load_data():
         all_data = []
-        data_dir = "data"
-        if os.path.exists(data_dir):
-            for file in os.listdir(data_dir):
+        # 現在のフォルダとdataフォルダの両方を再帰的に探す
+        for root, dirs, files in os.walk("."):
+            for file in files:
                 if file.endswith(('.csv', '.xlsx')):
-                    path = os.path.join(data_dir, file)
+                    path = os.path.join(root, file)
                     try:
                         df = pd.read_excel(path) if file.endswith('.xlsx') else pd.read_csv(path)
                         df.columns = df.columns.str.strip()
                         
-                        # 項目マッピング（ご提示いただいたCSVの正式名称）
-                        col_map = {
-                            'Pitcher First Name': 'Player',
-                            'Pitch Created At': 'Date',
-                            'RelSpeed (KMH)': 'Velo',
-                            'SpinRate': 'Spin',
-                            'Pitch Type': 'PitchType',
-                            'InducedVertBreak (CM)': 'IVB',
-                            'HorzBreak (CM)': 'HB',
-                            'PlateLocSide (CM)': 'LocX',
-                            'PlateLocHeight (CM)': 'LocY',
-                            'VertRelAngle': 'VRA',
-                            'HorzRelAngle': 'HRA',
-                            'Spin Efficiency': 'Eff'
+                        # カラムの紐付け（柔軟に対応）
+                        mapping = {
+                            'Player': ['Pitcher First Name', 'Pitcher', 'Player'],
+                            'Date': ['Pitch Created At', 'Date'],
+                            'Velo': ['RelSpeed (KMH)', 'Velo', 'Velocity'],
+                            'Spin': ['SpinRate', 'Spin Rate', 'Spin'],
+                            'PitchType': ['Pitch Type', 'PitchType'],
+                            'IVB': ['InducedVertBreak (CM)', 'IVB'],
+                            'HB': ['HorzBreak (CM)', 'HB'],
+                            'LocX': ['PlateLocSide (CM)', 'LocX'],
+                            'LocY': ['PlateLocHeight (CM)', 'LocY'],
+                            'VRA': ['VertRelAngle', 'VRA'],
+                            'HRA': ['HorzRelAngle', 'HRA'],
+                            'Eff': ['Spin Efficiency', 'Spin Efficiency (%)', 'Eff']
                         }
-                        for old, new in col_map.items():
-                            if old in df.columns:
-                                if new == 'Date':
-                                    df[new] = pd.to_datetime(df[old], errors='coerce').dt.date
-                                else:
-                                    df[new] = pd.to_numeric(df[old], errors='coerce') if new != 'PitchType' else df[old]
                         
-                        df = df.dropna(subset=['Player', 'Date', 'Velo'])
-                        all_data.append(df)
+                        new_df = pd.DataFrame()
+                        for target, opts in mapping.items():
+                            for opt in opts:
+                                if opt in df.columns:
+                                    if target == 'Date':
+                                        new_df[target] = pd.to_datetime(df[opt], errors='coerce').dt.date
+                                    else:
+                                        new_df[target] = pd.to_numeric(df[opt], errors='coerce') if target != 'PitchType' else df[opt]
+                                    break
+                        
+                        if 'Player' in new_df.columns and 'Velo' in new_df.columns:
+                            all_data.append(new_df.dropna(subset=['Player', 'Date', 'Velo']))
                     except: continue
         return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
@@ -85,60 +88,38 @@ if check_password():
         st.header(f"📊 {selected_player} 分析 ({selected_date})")
 
         col1, col2 = st.columns(2)
-
         with col1:
             st.subheader("変化量グラフ (IVB vs HB)")
-            # 軸の範囲を -80 〜 80 に固定
+            # 軸を -80 〜 80 に固定
             fig_break = px.scatter(p_df, x='HB', y='IVB', color='PitchType',
-                                 hover_data=['Velo'],
                                  range_x=[-80, 80], range_y=[-80, 80],
                                  labels={'HB': '水平変化 (cm)', 'IVB': '垂直変化 (cm)'})
-            
-            # 補助線
             fig_break.add_hline(y=0, line_dash="dash", line_color="black")
             fig_break.add_vline(x=0, line_dash="dash", line_color="black")
-            
-            # グラフの縦横比を正方形に近くして直感的にする
             fig_break.update_yaxes(scaleanchor="x", scaleratio=1)
             st.plotly_chart(fig_break, use_container_width=True)
 
         with col2:
             st.subheader("投球位置 (捕手視点)")
-            # 軸の範囲を 左右±60, 高さ0〜200 に固定
             fig_loc = px.scatter(p_df, x='LocX', y='LocY', color='PitchType',
                                range_x=[-60, 60], range_y=[0, 200],
                                labels={'LocX': '左右 (cm)', 'LocY': '高さ (cm)'})
-            # ストライクゾーンの枠線
-            fig_loc.add_shape(type="rect", x0=-25, y0=45, x1=25, y1=105,
-                            line=dict(color="black", width=2))
+            fig_loc.add_shape(type="rect", x0=-25, y0=45, x1=25, y1=105, line=dict(color="black", width=2))
             st.plotly_chart(fig_loc, use_container_width=True)
 
-        # 球種別統計表
         st.subheader("📋 球種別平均データ")
-        target_cols = ['Velo', 'Spin', 'VRA', 'HRA', 'Eff']
-        actual_cols = [c for c in target_cols if c in p_df.columns]
-        
-        if 'PitchType' in p_df.columns:
-            # 球種ごとの投球数も追加してみました
-            stats_df = p_df.groupby('PitchType').agg({
-                'Velo': 'count',  # 投球数カウント用
-                **{c: 'mean' for c in actual_cols}
+        if not p_df.empty:
+            # 集計
+            stats = p_df.groupby('PitchType').agg({
+                'Velo': ['count', 'mean'],
+                'Spin': 'mean',
+                'VRA': 'mean',
+                'HRA': 'mean',
+                'Eff': 'mean'
             }).reset_index()
-            
-            # カラム名の日本語化
-            rename_dict = {
-                'PitchType': '球種', 'Velo': '投球数', 'Spin': '回転数',
-                'VRA': 'リリース角度(縦)', 'HRA': 'リリース角度(横)', 'Eff': '回転効率(%)'
-            }
-            # 球種別平均球速の列を正しくセット
-            stats_df['Velo_mean'] = p_df.groupby('PitchType')['Velo'].mean().values
-            
-            # 列の並び替えと名前変更
-            final_cols = ['PitchType', 'Velo', 'Velo_mean', 'Spin', 'VRA', 'HRA', 'Eff']
-            stats_df = stats_df[final_cols]
-            stats_df.columns = ['球種', '投球数', '平均球速', '回転数', 'リリース角度(縦)', 'リリース角度(横)', '回転効率(%)']
-            
-            st.write(stats_df.to_html(classes='stats-table', index=False, float_format='%.1f'), unsafe_allow_html=True)
+            stats.columns = ['球種', '投球数', '平均球速', '回転数', '角度(縦)', '角度(横)', '回転効率']
+            st.write(stats.to_html(classes='stats-table', index=False, float_format='%.1f'), unsafe_allow_html=True)
             
     else:
-        st.warning("データが見つかりません。")
+        st.warning("データが見つかりません。CSVファイルが正しくアップロードされているか確認してください。")
+        st.info("ファイルが 'data' フォルダ、もしくはアプリと同じ場所に配置されている必要があります。")
