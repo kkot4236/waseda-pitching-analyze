@@ -2,37 +2,31 @@ import streamlit as st
 import pandas as pd
 import os
 import plotly.express as px
+import plotly.graph_objects as go
 
 # --- パスワード設定 ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = None
     if st.session_state["password_correct"] == True: return True
-    
     def password_entered():
-        # 安全にセッション状態を確認・更新
-        pw = st.session_state.get("password_input", "")
-        if pw == "wbc1901":
+        if st.session_state.get("password_input") == "wbc1901":
             st.session_state["password_correct"] = True
         else:
             st.session_state["password_correct"] = False
-
     st.title("⚾️ 早稲田大学野球部 投手分析システム")
     st.text_input("パスワードを入力", type="password", on_change=password_entered, key="password_input")
-    
-    if st.session_state.get("password_correct") == False:
-        st.error("パスワードが違います")
     return False
 
 if check_password():
-    st.set_page_config(layout="wide", page_title="Waseda Pitching Analyze")
+    st.set_page_config(layout="wide", page_title="Waseda Pitcher Analytics")
 
     # --- デザインCSS ---
     st.markdown("""
         <style>
-        .feedback-table { margin: auto; border-collapse: collapse; width: 100%; border: 1px solid #333; }
-        .feedback-table th { background-color: #1e3a8a !important; color: white !important; padding: 12px; text-align: center !important; }
-        .feedback-table td { padding: 10px; border: 1px solid #ccc; text-align: center !important; font-size: 16px; }
+        .stats-table { margin: auto; border-collapse: collapse; width: 100%; border: 1px solid #333; font-size: 14px; }
+        .stats-table th { background-color: #1e3a8a !important; color: white !important; padding: 8px; text-align: center !important; }
+        .stats-table td { padding: 8px; border: 1px solid #ccc; text-align: center !important; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -47,94 +41,100 @@ if check_password():
                     try:
                         df = pd.read_excel(path) if file.endswith('.xlsx') else pd.read_csv(path)
                         df.columns = df.columns.str.strip()
+                        # マッピング
+                        col_map = {
+                            'Pitcher First Name': 'Player',
+                            'Pitch Created At': 'Date',
+                            'RelSpeed (KMH)': 'Velo',
+                            'SpinRate': 'Spin',
+                            'Pitch Type': 'PitchType',
+                            'InducedVertBreak (CM)': 'IVB',
+                            'HorzBreak (CM)': 'HB',
+                            'PlateLocSide (CM)': 'LocX',
+                            'PlateLocHeight (CM)': 'LocY',
+                            'VertRelAngle': 'VRA',
+                            'HorzRelAngle': 'HRA',
+                            'Spin Efficiency': 'Eff'
+                        }
+                        for old, new in col_map.items():
+                            if old in df.columns:
+                                if new == 'Date':
+                                    df[new] = pd.to_datetime(df[old], errors='coerce').dt.date
+                                elif new in ['Velo', 'Spin', 'IVB', 'HB', 'LocX', 'LocY', 'VRA', 'HRA', 'Eff']:
+                                    df[new] = pd.to_numeric(df[old], errors='coerce')
+                                else:
+                                    df[new] = df[old]
                         
-                        # --- 指定された項目名で抽出 ---
-                        # 名前
-                        if 'Pitcher First Name' in df.columns:
-                            df['Player'] = df['Pitcher First Name']
-                        
-                        # 日付（エラーになる値を強制的に削除）
-                        if 'Pitch Created At' in df.columns:
-                            df['Date'] = pd.to_datetime(df['Pitch Created At'], errors='coerce').dt.date
-                        
-                        # 球速
-                        if 'RelSpeed (KMH)' in df.columns:
-                            df['Velo'] = pd.to_numeric(df['RelSpeed (KMH)'], errors='coerce')
-                        
-                        # 回転数
-                        if 'Spin Rate' in df.columns:
-                            df['Spin'] = pd.to_numeric(df['Spin Rate'], errors='coerce')
-
-                        # Player, Date, Velo が揃っていて、かつ不正値でない行だけ残す
                         df = df.dropna(subset=['Player', 'Date', 'Velo'])
-                        if not df.empty:
-                            all_data.append(df)
+                        all_data.append(df)
                     except: continue
-        
-        if not all_data:
-            return pd.DataFrame()
-        return pd.concat(all_data, ignore_index=True)
+        return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
     df = load_data()
 
     if not df.empty:
-        mode = st.sidebar.radio("メニュー", ["チーム全体分析", "個人詳細分析"])
+        # 1. 日付の選択
+        all_dates = sorted(df['Date'].unique(), reverse=True)
+        selected_date = st.sidebar.selectbox("1. 日付を選択", all_dates)
+        
+        # 2. 名前の選択
+        date_df = df[df['Date'] == selected_date]
+        all_players = sorted(date_df['Player'].unique())
+        selected_player = st.sidebar.selectbox("2. 投手を選択", all_players)
+        
+        p_df = date_df[date_df['Player'] == selected_player].copy()
 
-        if mode == "チーム全体分析":
-            st.header("📊 投手 球速ランキング")
-            # 日付リスト作成時に None を排除してソート
-            all_dates = sorted([d for d in df['Date'].unique() if d is not None], reverse=True)
-            
-            if all_dates:
-                selected_dates = st.multiselect("日付を選択", all_dates, default=[all_dates[0]])
-                
-                if selected_dates:
-                    curr_df = df[df['Date'].isin(selected_dates)]
-                    # 回転数がある場合とない場合で集計を変える
-                    agg_cols = {'Velo': ['mean', 'max']}
-                    if 'Spin' in curr_df.columns:
-                        agg_cols['Spin'] = 'mean'
-                    
-                    summary = curr_df.groupby('Player').agg(agg_cols)
-                    
-                    # カラム名の整理
-                    summary.columns = ['平均球速', 'MAX球速'] + (['平均回転数'] if 'Spin' in agg_cols else [])
-                    display_df = summary.sort_values('MAX球速', ascending=False).reset_index()
+        st.header(f"📊 {selected_player} 分析 ({selected_date})")
 
-                    st.write(display_df.to_html(classes='feedback-table', index=False, float_format='%.1f'), unsafe_allow_html=True)
+        # --- グラフセクション ---
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("変化量グラフ (IVB vs HB)")
+            if 'IVB' in p_df.columns and 'HB' in p_df.columns:
+                fig_break = px.scatter(p_df, x='HB', y='IVB', color='PitchType',
+                                     hover_data=['Velo'],
+                                     range_x=[-60, 60], range_y=[-60, 60],
+                                     labels={'HB': '水平変化 (cm)', 'IVB': '垂直変化 (cm)'})
+                fig_break.add_hline(y=0, line_dash="dash", line_color="gray")
+                fig_break.add_vline(x=0, line_dash="dash", line_color="gray")
+                st.plotly_chart(fig_break, use_container_width=True)
             else:
-                st.info("有効な日付データがありません。")
+                st.info("変化量データがありません")
 
-        else:
-            player = st.sidebar.selectbox("投手を選択", sorted(df['Player'].unique()))
-            st.header(f"👤 {player} 分析")
-            full_p_df = df[df['Player'] == player].copy()
-            
-            analysis_scope = st.radio("分析範囲", ["全期間（総合）", "特定の日付を選択"], horizontal=True)
-            if analysis_scope == "特定の日付を選択":
-                p_dates = sorted([d for d in full_p_df['Date'].unique() if d is not None], reverse=True)
-                sel_p_dates = st.multiselect("日付を選択してください", p_dates, default=[p_dates[0]])
-                p_df = full_p_df[full_p_df['Date'].isin(sel_p_dates)]
+        with col2:
+            st.subheader("投球位置 (捕手視点)")
+            if 'LocX' in p_df.columns and 'LocY' in p_df.columns:
+                fig_loc = px.scatter(p_df, x='LocX', y='LocY', color='PitchType',
+                                   range_x=[-100, 100], range_y=[0, 200],
+                                   labels={'LocX': '左右 (cm)', 'LocY': '高さ (cm)'})
+                # ストライクゾーンの目安
+                fig_loc.add_shape(type="rect", x0=-25, y0=45, x1=25, y1=105,
+                                line=dict(color="RoyalBlue", width=3))
+                st.plotly_chart(fig_loc, use_container_width=True)
             else:
-                p_df = full_p_df
+                st.info("投球位置データがありません")
 
-            if not p_df.empty:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("MAX球速", f"{p_df['Velo'].max():.1f} km/h")
-                c2.metric("平均球速", f"{p_df['Velo'].mean():.1f} km/h")
-                spin_val = p_df['Spin'].mean() if 'Spin' in p_df.columns else 0
-                c3.metric("平均回転数", f"{int(spin_val)} rpm")
+        # --- 球種別統計表 ---
+        st.subheader("📋 球種別平均データ")
+        if 'PitchType' in p_df.columns:
+            # 指定された項目の平均を計算
+            stats_df = p_df.groupby('PitchType').agg({
+                'Velo': 'mean',
+                'Spin': 'mean',
+                'VRA': 'mean',
+                'HRA': 'mean',
+                'Eff': 'mean'
+            }).reset_index()
+            
+            stats_df.columns = ['球種', '平均球速', '平均回転数', 'リリース角度(縦)', 'リリース角度(横)', '回転効率(%)']
+            
+            # 回転効率を%表示にするなどの整形
+            st.write(stats_df.to_html(classes='stats-table', index=False, float_format='%.1f'), unsafe_allow_html=True)
+        
+        # 詳細データ一覧
+        with st.expander("全投球データを確認"):
+            st.dataframe(p_df)
 
-                st.subheader("📈 球速推移（通算）")
-                trend = full_p_df.groupby('Date')['Velo'].agg(['mean', 'max']).reset_index()
-                fig = px.line(trend, x='Date', y=['mean', 'max'], markers=True)
-                fig.update_layout(yaxis_range=[125, 160])
-                st.plotly_chart(fig, use_container_width=True)
-
-                st.subheader("📋 投球履歴")
-                hist_cols = [c for c in ['Date', 'Velo', 'Spin'] if c in p_df.columns]
-                hist = p_df[hist_cols].sort_values(['Date', 'Velo'], ascending=[False, False])
-                st.write(hist.to_html(classes='feedback-table', index=False, float_format='%.1f'), unsafe_allow_html=True)
     else:
-        st.warning("⚠️ 有効な投手データが見つかりません。")
-        st.info("CSVの項目名を確認してください:\n- Pitcher First Name\n- Pitch Created At\n- RelSpeed (KMH)")
+        st.warning("有効なデータが見つかりません。'data'フォルダのCSVを確認してください。")
